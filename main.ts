@@ -6,7 +6,7 @@ import { SecurityManager } from './src/SecurityManager';
 import { MountManagerModal, getMountStatus, browseFolderOnDisk, browseMultipleFoldersOnDisk, VaultFolderPickerModal } from './src/ui/MountManagerModal';
 import { MountRootDeleteModal } from './src/ui/MountRootDeleteModal';
 import { WelcomeModal } from './src/ui/WelcomeModal';
-import { getPlatform, realPathToResourceUrl, tryReadAsDataUri } from './src/OSHelpers';
+import { getPlatform, realPathToResourceUrl, tryReadAsDataUri, expandEnvironmentVariables } from './src/OSHelpers';
 import { FileServer } from './src/FileServer';
 import {
 	encryptCredential, decryptCredential,
@@ -296,10 +296,11 @@ export default class FolderBridgePlugin extends Plugin {
 	}
 
 	addManualAllowlistPath(realPath: string): void {
-		if (!this.persistedAllowlist.includes(realPath)) {
-			this.persistedAllowlist.push(realPath);
+		const expandedPath = expandEnvironmentVariables(realPath);
+		if (!this.persistedAllowlist.includes(expandedPath)) {
+			this.persistedAllowlist.push(expandedPath);
 		}
-		this.security?.allow(realPath);
+		this.security?.allow(expandedPath);
 	}
 
 	resyncEffectiveMountState(): void {
@@ -307,7 +308,8 @@ export default class FolderBridgePlugin extends Plugin {
 	}
 
 	private effectiveRealPathForAllowlist(mount: MountPoint): string {
-		return mount.deviceOverrides?.[this.settings.deviceId] ?? mount.realPath;
+		const basePath = mount.deviceOverrides?.[this.settings.deviceId] ?? mount.realPath;
+		return expandEnvironmentVariables(basePath);
 	}
 
 	private isCloudMount(mount: Pick<MountPoint, 'mountType'>): boolean {
@@ -1252,9 +1254,12 @@ export default class FolderBridgePlugin extends Plugin {
 		}
 
 		// Register in allowlist (local mounts only — cloud mounts have no local path)
-		if (!isCloud && !this.canPersistToManagedToc(mount.mountType) && !this.persistedAllowlist.includes(mount.realPath)) {
-			this.persistedAllowlist.push(mount.realPath);
-			this.security.allow(mount.realPath);
+		if (!isCloud && !this.canPersistToManagedToc(mount.mountType)) {
+			const effectiveRealPath = expandEnvironmentVariables(mount.deviceOverrides?.[this.settings.deviceId] ?? mount.realPath);
+			if (!this.persistedAllowlist.includes(effectiveRealPath)) {
+				this.persistedAllowlist.push(effectiveRealPath);
+				this.security.allow(effectiveRealPath);
+			}
 		}
 
 		// Wire up WebDAV adapter
@@ -1362,12 +1367,16 @@ export default class FolderBridgePlugin extends Plugin {
 		this.persistedMountPoints.splice(idx, 1);
 
 		// Only revoke the allowlist entry if no other active mount shares the real path
-		const stillUsed = this.persistedMountPoints.some(m => m.realPath === mount.realPath);
+		const mountEffectiveRealPath = expandEnvironmentVariables(mount.deviceOverrides?.[this.settings.deviceId] ?? mount.realPath);
+		const stillUsed = this.persistedMountPoints.some(m => {
+			const mEffectiveRealPath = expandEnvironmentVariables(m.deviceOverrides?.[this.settings.deviceId] ?? m.realPath);
+			return mEffectiveRealPath === mountEffectiveRealPath;
+		});
 		if (!stillUsed) {
-			this.persistedAllowlist = this.persistedAllowlist.filter(p => p !== mount.realPath);
-			this.security.revoke(mount.realPath);
+			this.persistedAllowlist = this.persistedAllowlist.filter(p => p !== mountEffectiveRealPath);
+			this.security.revoke(mountEffectiveRealPath);
 			// Revoke streaming-server access for this real path
-			if (mount.realPath) this.fileServer.removeAllowedPath(mount.realPath);
+			if (mountEffectiveRealPath) this.fileServer.removeAllowedPath(mountEffectiveRealPath);
 		}
 
 		// Tear down adapters and clear stored credentials
@@ -1536,15 +1545,22 @@ export default class FolderBridgePlugin extends Plugin {
 		const oldIsCloud = oldMount.mountType === 'webdav' || oldMount.mountType === 's3' || oldMount.mountType === 'sftp';
 		if (realPathChanged) {
 			if (!oldIsCloud) {
-				const stillUsed = otherMounts.some(m => m.realPath === oldMount.realPath);
+				const oldEffectiveRealPath = expandEnvironmentVariables(oldMount.deviceOverrides?.[this.settings.deviceId] ?? oldMount.realPath);
+				const stillUsed = otherMounts.some(m => {
+					const mEffectiveRealPath = expandEnvironmentVariables(m.deviceOverrides?.[this.settings.deviceId] ?? m.realPath);
+					return mEffectiveRealPath === oldEffectiveRealPath;
+				});
 				if (!stillUsed) {
-					this.persistedAllowlist = this.persistedAllowlist.filter(p => p !== oldMount.realPath);
-					this.security.revoke(oldMount.realPath);
+					this.persistedAllowlist = this.persistedAllowlist.filter(p => p !== oldEffectiveRealPath);
+					this.security.revoke(oldEffectiveRealPath);
 				}
 			}
-			if (!newIsCloud && !this.persistedAllowlist.includes(newData.realPath)) {
-				this.persistedAllowlist.push(newData.realPath);
-				this.security.allow(newData.realPath);
+			if (!newIsCloud) {
+				const newEffectiveRealPath = expandEnvironmentVariables(newData.deviceOverrides?.[this.settings.deviceId] ?? newData.realPath);
+				if (!this.persistedAllowlist.includes(newEffectiveRealPath)) {
+					this.persistedAllowlist.push(newEffectiveRealPath);
+					this.security.allow(newEffectiveRealPath);
+				}
 			}
 		}
 
@@ -2015,7 +2031,7 @@ export default class FolderBridgePlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 		this.settings.managedTocSource = this.settings.managedTocSource ?? '';
 		this.persistedMountPoints = [...this.settings.mountPoints];
-		this.persistedAllowlist = [...this.settings.allowlist];
+		this.persistedAllowlist = [...this.settings.allowlist].map(path => expandEnvironmentVariables(path));
 
 		// Generate a unique device ID if one doesn't exist
 		if (!this.settings.deviceId) {
@@ -2207,11 +2223,11 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 					})();
 
 					new Setting(containerEl)
-							.setName(`Support ${pluginName}`)
+						.setName(`Support ${pluginName}`)
 						.setDesc('Follow ongoing work, browse other projects, or star the repository on GitHub.')
 						.addButton(btn => btn
 							.setButtonText('GitHub repo')
-								.setTooltip(`Open the ${pluginName} repository`)
+							.setTooltip(`Open the ${pluginName} repository`)
 							.onClick(() => openExternalUrl(GITHUB_REPO_URL)))
 						.addButton(btn => btn
 							.setButtonText('More projects')
@@ -2914,7 +2930,7 @@ class FolderBridgeSettingTab extends PluginSettingTab {
 
 		// ── Async status badge ───────────────────────────────────────────────
 		if (canEnable) {
-			void getMountStatus(mount).then(status => {
+			void getMountStatus(mount, this.settings.deviceId).then(status => {
 				const isUnreachable = this.plugin.mountHealthMap.get(mount.id) === false;
 				const badge = isUnreachable
 					? '[unreachable]'

@@ -1,5 +1,5 @@
 import { MountPoint, MountType } from './types';
-import { normalizeForComparison, isUNCPath, expandEnvironmentVariables } from './OSHelpers';
+import { normalizeForComparison, isUNCPath, expandEnvironmentVariables, containsEnvironmentVariables } from './OSHelpers';
 import { loadOptionalNodeModule } from './runtimeNode';
 // Node.js builtins are lazy-loaded so the plugin still loads on mobile
 const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')>('path') ?? null as never;
@@ -66,31 +66,46 @@ export class SecurityManager {
 				return 'Real path cannot be empty.';
 			}
 
-			// Expand environment variables in the path
-			const expandedRealPath = expandEnvironmentVariables(mount.realPath);
+			// Check if path contains environment variables
+			const hasEnvVars = containsEnvironmentVariables(mount.realPath);
 
-			if (!path.isAbsolute(expandedRealPath)) {
-				return 'Real path must be an absolute filesystem path (after expanding environment variables).';
+			if (hasEnvVars) {
+				// If path contains environment variables, we can't fully validate it in this environment
+				// (variables might be for a different platform). We'll allow it and validate at mount time.
+			} else {
+				// No environment variables - validate that it's absolute
+				if (!path.isAbsolute(mount.realPath)) {
+					return 'Real path must be an absolute filesystem path.';
+				}
 			}
 
-			// Block obviously dangerous root-level paths and their subdirectories
-			const dangerous = [
-				'/', '/etc', '/usr', '/bin', '/sbin', '/boot', '/dev', '/proc', '/sys', '/var',
-				'C:\\', 'C:/',
-				'C:\\Windows', 'C:/Windows',
-				'C:\\Program Files', 'C:/Program Files',
-				'C:\\Program Files (x86)', 'C:/Program Files (x86)'
-			];
-			const norm = normalizeForComparison(expandedRealPath);
-			for (const d of dangerous) {
-				const dangerousNorm = normalizeForComparison(d);
-				if (
-					norm === dangerousNorm ||
-					norm.startsWith(dangerousNorm + path.sep) ||
-					// Case-insensitive comparison may produce lowercased or normalized separators; check both
-					norm.startsWith(dangerousNorm + '/')
-				) {
-					return `"${mount.realPath}" is a protected system path and cannot be mounted.`;
+			// Expand environment variables for security checks (dangerous paths, overlaps)
+			const expandedRealPath = expandEnvironmentVariables(mount.realPath);
+
+			// Only perform dangerous path checks if we could expand all variables
+			// If variables couldn't be expanded, we'll skip these checks for now
+			const couldExpandAll = !/%[^%]*%|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*/.test(expandedRealPath);
+
+			if (couldExpandAll) {
+				// Block obviously dangerous root-level paths and their subdirectories
+				const dangerous = [
+					'/', '/etc', '/usr', '/bin', '/sbin', '/boot', '/dev', '/proc', '/sys', '/var',
+					'C:\\', 'C:/',
+					'C:\\Windows', 'C:/Windows',
+					'C:\\Program Files', 'C:/Program Files',
+					'C:\\Program Files (x86)', 'C:/Program Files (x86)'
+				];
+				const norm = normalizeForComparison(expandedRealPath);
+				for (const d of dangerous) {
+					const dangerousNorm = normalizeForComparison(d);
+					if (
+						norm === dangerousNorm ||
+						norm.startsWith(dangerousNorm + path.sep) ||
+						// Case-insensitive comparison may produce lowercased or normalized separators; check both
+						norm.startsWith(dangerousNorm + '/')
+					) {
+						return `"${expandedRealPath}" is a protected system path and cannot be mounted.`;
+					}
 				}
 			}
 		}

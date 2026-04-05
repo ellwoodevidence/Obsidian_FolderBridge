@@ -14,6 +14,7 @@ import {
 	isWSL,
 	wslMountToWindowsPath,
 	expandEnvironmentVariables,
+	containsEnvironmentVariables,
 } from '../src/OSHelpers';
 
 // Helper: temporarily override process.platform for Windows-specific tests
@@ -344,6 +345,35 @@ describe('OSHelpers', () => {
 
 		it('returns null for Windows-style paths', () => {
 			expect(wslMountToWindowsPath('C:\\Users\\foo')).toBeNull();
+		});
+	});
+
+	describe('containsEnvironmentVariables', () => {
+		it('detects %VAR% syntax', () => {
+			expect(containsEnvironmentVariables('C:\\Users\\%USERNAME%\\Documents')).toBe(true);
+		});
+
+		it('detects $VAR syntax', () => {
+			expect(containsEnvironmentVariables('$HOME/Documents')).toBe(true);
+		});
+
+		it('detects ${VAR} syntax', () => {
+			expect(containsEnvironmentVariables('/home/${USER}/docs')).toBe(true);
+		});
+
+		it('returns false for paths without variables', () => {
+			expect(containsEnvironmentVariables('/home/user/docs')).toBe(false);
+			expect(containsEnvironmentVariables('C:\\Users\\user\\Documents')).toBe(false);
+		});
+
+		it('returns false for empty string', () => {
+			expect(containsEnvironmentVariables('')).toBe(false);
+		});
+
+		it('handles malformed patterns', () => {
+			expect(containsEnvironmentVariables('%incomplete')).toBe(false);
+			expect(containsEnvironmentVariables('$')).toBe(false);
+			expect(containsEnvironmentVariables('${incomplete')).toBe(false);
 		});
 	});
 

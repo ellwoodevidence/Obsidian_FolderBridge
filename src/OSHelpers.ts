@@ -26,6 +26,15 @@ export function getPlatform(): OSPlatform {
 }
 
 /**
+ * Check if a path string contains environment variables.
+ * Returns true if the path contains %VAR%, $VAR, or ${VAR} patterns.
+ */
+export function containsEnvironmentVariables(pathStr: string): boolean {
+	if (!pathStr) return false;
+	return /%[^%]+%|\$\{[^{}]+\}|\$[A-Za-z_][A-Za-z0-9_]*/.test(pathStr);
+}
+
+/**
  * Expand environment variables in a path string.
  * Supports %VAR% syntax (Windows) and $VAR/${VAR} syntax (Unix).
  * Returns the path with variables expanded using process.env.

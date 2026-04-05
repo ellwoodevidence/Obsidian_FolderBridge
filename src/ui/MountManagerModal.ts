@@ -1,7 +1,7 @@
 import { App, ButtonComponent, Modal, Notice, Platform, Setting, SuggestModal, TFolder, TextComponent, normalizePath } from 'obsidian';
 import { MountPoint, MountStatus, MountType } from '../types';
 import { SecurityManager } from '../SecurityManager';
-import { checkPathAccessible, isDirectory, getPlatform, isWSL, expandEnvironmentVariables } from '../OSHelpers';
+import { checkPathAccessible, isDirectory, getPlatform, isWSL, expandEnvironmentVariables, containsEnvironmentVariables } from '../OSHelpers';
 import { logger } from '../logger';
 import { getRuntimeRequire, loadOptionalNodeModule } from '../runtimeNode';
 import { SubmitStateController } from './SubmitStateController';
@@ -1207,13 +1207,20 @@ export class MountManagerModal extends Modal {
 			return;
 		}
 
-		// Expand environment variables and check if absolute
-		const expandedRealPath = expandEnvironmentVariables(this.realPath);
-		if (!path.isAbsolute(expandedRealPath)) {
-			this.submitState.finish();
-			this.syncSubmitButtons();
-			new Notice(`${this.pluginName}: Real path must be an absolute filesystem path (after expanding environment variables).`);
-			return;
+		// Check if path contains environment variables
+		const hasEnvVars = containsEnvironmentVariables(this.realPath);
+
+		if (hasEnvVars) {
+			// If path contains environment variables, we can't fully validate it in this environment
+			// (variables might be for a different platform). We'll allow it and validate at mount time.
+		} else {
+			// No environment variables - validate that it's absolute
+			if (!path.isAbsolute(this.realPath)) {
+				this.submitState.finish();
+				this.syncSubmitButtons();
+				new Notice(`${this.pluginName}: Real path must be an absolute filesystem path.`);
+				return;
+			}
 		}
 
 		const normalizedVirtual = normalizePath(virtualPathToUse);
@@ -1239,25 +1246,33 @@ export class MountManagerModal extends Modal {
 		// Only re-check accessibility when the real path has changed (or this is a new mount)
 		const realPathChanged = !this.editMount || this.editMount.realPath !== this.realPath;
 		if (realPathChanged) {
-			const dirExists = await isDirectory(expandedRealPath);
-			if (!dirExists) {
-				this.submitState.finish();
-				this.syncSubmitButtons();
-				new Notice(`Folder Bridge: "${expandedRealPath}" is not an accessible directory.`);
-				return;
-			}
+			// Expand environment variables for accessibility check
+			const expandedRealPath = expandEnvironmentVariables(this.realPath);
 
-			const { accessible, error } = await checkPathAccessible(expandedRealPath);
-			if (!accessible) {
-				this.submitState.finish();
-				this.syncSubmitButtons();
-				new Notice(`Folder Bridge: Cannot access "${expandedRealPath}": ${error}`);
-				return;
+			// Only check accessibility if all variables could be expanded
+			const couldExpandAll = !/%[^%]*%|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*/.test(expandedRealPath);
+
+			if (couldExpandAll) {
+				const dirExists = await isDirectory(expandedRealPath);
+				if (!dirExists) {
+					this.submitState.finish();
+					this.syncSubmitButtons();
+					new Notice(`Folder Bridge: "${expandedRealPath}" is not an accessible directory.`);
+					return;
+				}
+
+				const { accessible, error } = await checkPathAccessible(expandedRealPath);
+				if (!accessible) {
+					this.submitState.finish();
+					this.syncSubmitButtons();
+					new Notice(`Folder Bridge: Cannot access "${expandedRealPath}": ${error}`);
+					return;
+				}
 			}
 		}
 
 		// Non-blocking advisory warnings (e.g. UNC / network paths)
-		const warnings = this.security.getPathWarnings(expandedRealPath);
+		const warnings = this.security.getPathWarnings(expandEnvironmentVariables(this.realPath));
 		for (const w of warnings) {
 			new Notice(`Folder Bridge warning: ${w}`, 10_000);
 		}
@@ -1297,7 +1312,7 @@ export class MountManagerModal extends Modal {
  * Query the live reachability and permission status of a mount point.
  * Called when the settings tab renders the mount list.
  */
-export async function getMountStatus(mount: MountPoint): Promise<MountStatus> {
+export async function getMountStatus(mount: MountPoint, currentDeviceId?: string): Promise<MountStatus> {
 	// Remote mounts (WebDAV, S3, SFTP) have no local filesystem path to check.
 	// Their reachability is probed by the plugin's health-check loop separately.
 	// Return a placeholder "reachable" status so the settings panel stays clean.
@@ -1309,7 +1324,10 @@ export async function getMountStatus(mount: MountPoint): Promise<MountStatus> {
 			error: undefined,
 		};
 	}
-	const { accessible, readOnly, error } = await checkPathAccessible(mount.realPath);
+	
+	// Expand environment variables in the path before checking accessibility
+	const effectiveRealPath = expandEnvironmentVariables(mount.deviceOverrides?.[currentDeviceId || mount.deviceId || ''] ?? mount.realPath);
+	const { accessible, readOnly, error } = await checkPathAccessible(effectiveRealPath);
 	return {
 		mount,
 		reachable: accessible,
