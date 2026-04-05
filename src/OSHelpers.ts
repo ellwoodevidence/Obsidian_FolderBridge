@@ -25,6 +25,33 @@ export function getPlatform(): OSPlatform {
 	}
 }
 
+/**
+ * Expand environment variables in a path string.
+ * Supports %VAR% syntax (Windows) and $VAR/${VAR} syntax (Unix).
+ * Returns the path with variables expanded using process.env.
+ */
+export function expandEnvironmentVariables(pathStr: string): string {
+	if (!pathStr) return pathStr;
+
+	// Get environment variables
+	const env = (typeof process !== 'undefined' && process.env) ? process.env : {};
+
+	// Replace %VAR% (Windows style)
+	pathStr = pathStr.replace(/%([^%]+)%/g, (match, varName) => {
+		return env[varName] || match; // Keep original if not found
+	});
+
+	// Replace $VAR and ${VAR} (Unix style)
+	pathStr = pathStr.replace(/\$\{([^}]+)\}/g, (match, varName) => {
+		return env[varName] || match; // Keep original if not found
+	});
+	pathStr = pathStr.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (match, varName) => {
+		return env[varName] || match; // Keep original if not found
+	});
+
+	return pathStr;
+}
+
 // ---------------------------------------------------------------------------
 // Accessibility checks
 // ---------------------------------------------------------------------------

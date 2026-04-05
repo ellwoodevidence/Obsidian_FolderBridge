@@ -13,6 +13,7 @@ import {
 	isCloudPlaceholder,
 	isWSL,
 	wslMountToWindowsPath,
+	expandEnvironmentVariables,
 } from '../src/OSHelpers';
 
 // Helper: temporarily override process.platform for Windows-specific tests
@@ -25,6 +26,23 @@ function withPlatform(platform: NodeJS.Platform, fn: () => void): void {
 }
 
 describe('OSHelpers', () => {
+
+	// Helper: temporarily set / clear a process.env variable
+	function withEnv(key: string, value: string | undefined, fn: () => void): void {
+		const orig = process.env[key];
+		if (value === undefined) {
+			delete process.env[key];
+		} else {
+			process.env[key] = value;
+		}
+		try { fn(); } finally {
+			if (orig === undefined) {
+				delete process.env[key];
+			} else {
+				process.env[key] = orig;
+			}
+		}
+	}
 
 	describe('normalizeRealPath', () => {
 		it('normalizes a POSIX path', () => {
@@ -231,22 +249,6 @@ describe('OSHelpers', () => {
 	});
 
 	describe('isWSL', () => {
-		// Helper: temporarily set / clear a process.env variable
-		function withEnv(key: string, value: string | undefined, fn: () => void): void {
-			const orig = process.env[key];
-			if (value === undefined) {
-				delete process.env[key];
-			} else {
-				process.env[key] = value;
-			}
-			try { fn(); } finally {
-				if (orig === undefined) {
-					delete process.env[key];
-				} else {
-					process.env[key] = orig;
-				}
-			}
-		}
 
 		it('returns false on Windows', () => {
 			withPlatform('win32', () => {
@@ -342,6 +344,46 @@ describe('OSHelpers', () => {
 
 		it('returns null for Windows-style paths', () => {
 			expect(wslMountToWindowsPath('C:\\Users\\foo')).toBeNull();
+		});
+	});
+
+	describe('expandEnvironmentVariables', () => {
+		it('expands %VAR% syntax on Windows', () => {
+			withEnv('USERNAME', 'testuser', () => {
+				expect(expandEnvironmentVariables('C:\\Users\\%USERNAME%\\Documents')).toBe('C:\\Users\\testuser\\Documents');
+			});
+		});
+
+		it('expands $VAR syntax on Unix', () => {
+			withEnv('HOME', '/home/testuser', () => {
+				expect(expandEnvironmentVariables('$HOME/Documents')).toBe('/home/testuser/Documents');
+			});
+		});
+
+		it('expands ${VAR} syntax', () => {
+			withEnv('USER', 'testuser', () => {
+				expect(expandEnvironmentVariables('/home/${USER}/docs')).toBe('/home/testuser/docs');
+			});
+		});
+
+		it('leaves unknown variables unchanged', () => {
+			expect(expandEnvironmentVariables('C:\\Users\\%UNKNOWN%\\docs')).toBe('C:\\Users\\%UNKNOWN%\\docs');
+		});
+
+		it('handles mixed syntax', () => {
+			withEnv('USER', 'alice', () => {
+				withEnv('HOME', '/home/alice', () => {
+					expect(expandEnvironmentVariables('$HOME/${USER}/docs')).toBe('/home/alice/alice/docs');
+				});
+			});
+		});
+
+		it('returns unchanged string if no variables', () => {
+			expect(expandEnvironmentVariables('/home/user/docs')).toBe('/home/user/docs');
+		});
+
+		it('handles empty string', () => {
+			expect(expandEnvironmentVariables('')).toBe('');
 		});
 	});
 });

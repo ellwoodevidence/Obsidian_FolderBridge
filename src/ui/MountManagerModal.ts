@@ -1,7 +1,7 @@
 import { App, ButtonComponent, Modal, Notice, Platform, Setting, SuggestModal, TFolder, TextComponent, normalizePath } from 'obsidian';
 import { MountPoint, MountStatus, MountType } from '../types';
 import { SecurityManager } from '../SecurityManager';
-import { checkPathAccessible, isDirectory, getPlatform, isWSL } from '../OSHelpers';
+import { checkPathAccessible, isDirectory, getPlatform, isWSL, expandEnvironmentVariables } from '../OSHelpers';
 import { logger } from '../logger';
 import { getRuntimeRequire, loadOptionalNodeModule } from '../runtimeNode';
 import { SubmitStateController } from './SubmitStateController';
@@ -1206,10 +1206,13 @@ export class MountManagerModal extends Modal {
 			new Notice(`${this.pluginName}: Real path is required.`);
 			return;
 		}
-		if (!path.isAbsolute(this.realPath)) {
+
+		// Expand environment variables and check if absolute
+		const expandedRealPath = expandEnvironmentVariables(this.realPath);
+		if (!path.isAbsolute(expandedRealPath)) {
 			this.submitState.finish();
 			this.syncSubmitButtons();
-			new Notice(`${this.pluginName}: Real path must be an absolute filesystem path.`);
+			new Notice(`${this.pluginName}: Real path must be an absolute filesystem path (after expanding environment variables).`);
 			return;
 		}
 
@@ -1236,25 +1239,25 @@ export class MountManagerModal extends Modal {
 		// Only re-check accessibility when the real path has changed (or this is a new mount)
 		const realPathChanged = !this.editMount || this.editMount.realPath !== this.realPath;
 		if (realPathChanged) {
-			const dirExists = await isDirectory(this.realPath);
+			const dirExists = await isDirectory(expandedRealPath);
 			if (!dirExists) {
 				this.submitState.finish();
 				this.syncSubmitButtons();
-				new Notice(`Folder Bridge: "${this.realPath}" is not an accessible directory.`);
+				new Notice(`Folder Bridge: "${expandedRealPath}" is not an accessible directory.`);
 				return;
 			}
 
-			const { accessible, error } = await checkPathAccessible(this.realPath);
+			const { accessible, error } = await checkPathAccessible(expandedRealPath);
 			if (!accessible) {
 				this.submitState.finish();
 				this.syncSubmitButtons();
-				new Notice(`Folder Bridge: Cannot access "${this.realPath}": ${error}`);
+				new Notice(`Folder Bridge: Cannot access "${expandedRealPath}": ${error}`);
 				return;
 			}
 		}
 
 		// Non-blocking advisory warnings (e.g. UNC / network paths)
-		const warnings = this.security.getPathWarnings(this.realPath);
+		const warnings = this.security.getPathWarnings(expandedRealPath);
 		for (const w of warnings) {
 			new Notice(`Folder Bridge warning: ${w}`, 10_000);
 		}

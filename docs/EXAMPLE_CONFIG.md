@@ -30,16 +30,19 @@ Mount points are configured through the Obsidian settings UI, but this example s
 ## Field Descriptions
 
 - **virtualPath**: The path as it appears in your Obsidian vault (relative to vault root)
-- **realPath**: The actual filesystem path that the virtual path maps to
+- **realPath**: The actual filesystem path that the virtual path maps to. Supports environment variables using `%VAR%` (Windows) or `$VAR`/`${VAR}` (Unix) syntax, which are expanded at mount time.
 - **enabled**: Whether this mount point is currently active
 
 ## Usage Notes
 
 1. **Virtual paths** should use forward slashes (/) regardless of OS
 2. **Real paths** should use OS-appropriate path separators
-3. Virtual paths must be unique within the vault
-4. Real paths must exist on the filesystem before mounting
-5. Disabled mount points are preserved but not active
+3. **Environment variables** in realPath are expanded when the mount is activated. For example:
+   - Windows: `"C:\\Users\\%USERNAME%\\Documents"`
+   - Unix: `"/home/$USER/Documents"` or `"/home/${USER}/Documents"`
+4. Virtual paths must be unique within the vault
+5. Real paths must exist on the filesystem before mounting (after environment variable expansion)
+6. Disabled mount points are preserved but not active
 
 ## Security Considerations
 

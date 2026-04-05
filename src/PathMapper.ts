@@ -1,5 +1,6 @@
 import { normalizePath } from 'obsidian';
 import { MountPoint } from './types';
+import { expandEnvironmentVariables } from './OSHelpers';
 import { loadOptionalNodeModule } from './runtimeNode';
 // Node.js builtins are lazy-loaded so the plugin still loads on mobile
 const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')>('path') ?? null as never;
@@ -47,12 +48,16 @@ export class PathMapper {
 	/**
 	 * Gets the effective real path for a mount on this specific device,
 	 * falling back to the original realPath if no override exists.
+	 * Environment variables in the path are expanded at runtime.
 	 */
 	getEffectiveRealPath(mount: MountPoint): string {
+		let realPath: string;
 		if (this.currentDeviceId && mount.deviceOverrides && mount.deviceOverrides[this.currentDeviceId]) {
-			return mount.deviceOverrides[this.currentDeviceId];
+			realPath = mount.deviceOverrides[this.currentDeviceId];
+		} else {
+			realPath = mount.realPath;
 		}
-		return mount.realPath;
+		return expandEnvironmentVariables(realPath);
 	}
 
 	/**

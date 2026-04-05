@@ -1,5 +1,5 @@
 import { MountPoint, MountType } from './types';
-import { normalizeForComparison, isUNCPath } from './OSHelpers';
+import { normalizeForComparison, isUNCPath, expandEnvironmentVariables } from './OSHelpers';
 import { loadOptionalNodeModule } from './runtimeNode';
 // Node.js builtins are lazy-loaded so the plugin still loads on mobile
 const path: typeof import('path') = loadOptionalNodeModule<typeof import('path')>('path') ?? null as never;
@@ -65,8 +65,12 @@ export class SecurityManager {
 			if (!mount.realPath || !mount.realPath.trim()) {
 				return 'Real path cannot be empty.';
 			}
-			if (!path.isAbsolute(mount.realPath)) {
-				return 'Real path must be an absolute filesystem path.';
+
+			// Expand environment variables in the path
+			const expandedRealPath = expandEnvironmentVariables(mount.realPath);
+
+			if (!path.isAbsolute(expandedRealPath)) {
+				return 'Real path must be an absolute filesystem path (after expanding environment variables).';
 			}
 
 			// Block obviously dangerous root-level paths and their subdirectories
@@ -77,7 +81,7 @@ export class SecurityManager {
 				'C:\\Program Files', 'C:/Program Files',
 				'C:\\Program Files (x86)', 'C:/Program Files (x86)'
 			];
-			const norm = normalizeForComparison(mount.realPath);
+			const norm = normalizeForComparison(expandedRealPath);
 			for (const d of dangerous) {
 				const dangerousNorm = normalizeForComparison(d);
 				if (
@@ -144,19 +148,21 @@ export class SecurityManager {
 		// Cloud mounts use remote addresses, not local paths — skip all local-path warnings.
 		if (mountType != null && CLOUD_MOUNT_TYPES.has(mountType)) return warnings;
 
-		if (isUNCPath(realPath)) {
+		const expandedRealPath = expandEnvironmentVariables(realPath);
+
+		if (isUNCPath(expandedRealPath)) {
 			warnings.push(
-				`"${realPath}" is a UNC network path. Network mounts may be slow, ` +
+				`"${expandedRealPath}" is a UNC network path. Network mounts may be slow, ` +
 				`unavailable offline, or behave differently from local folders ` +
 				`(e.g. file watching may not work on some servers).`
 			);
 		}
 
-		const norm = normalizeForComparison(realPath);
+		const norm = normalizeForComparison(expandedRealPath);
 		for (const m of existingMounts) {
 			const existingReal = m.realPath;
 			if (!existingReal) continue;
-			const existingRealNorm = normalizeForComparison(existingReal);
+			const existingRealNorm = normalizeForComparison(expandEnvironmentVariables(existingReal));
 			if (existingRealNorm === norm) continue;
 
 			const isCandidateChildOfExisting =
@@ -168,7 +174,7 @@ export class SecurityManager {
 
 			if (isCandidateChildOfExisting || isExistingChildOfCandidate) {
 				warnings.push(
-					`Real path "${realPath}" overlaps with existing mount "${existingReal}". ` +
+					`Real path "${expandedRealPath}" overlaps with existing mount "${expandEnvironmentVariables(existingReal)}". ` +
 					`The same files on disk will be reachable via two different vault paths.`
 				);
 			}

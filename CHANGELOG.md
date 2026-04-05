@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Environment variable support in mount paths** — realPath fields now support environment variables using `%VAR%` (Windows) or `$VAR`/`${VAR}` (Unix) syntax. Variables are expanded at mount time, allowing paths like `C:\Users\%USERNAME%\Documents` to work across different user accounts.
+
 ## [2.15.3] - 2026-03-18
 
 ### Fixed
